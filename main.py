@@ -95,3 +95,4 @@ async def upload(file: UploadFile = File(...)):
 async def ask(query: str = Query(..., description="Your question")):
     # stream the LLM answer back token by token
     return StreamingResponse(answer(query), media_type="text/plain")
+
