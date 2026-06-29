@@ -20,7 +20,7 @@ question ─► embed ─► nearest chunks ─► prompt ─► LLM ─► stre
 | `main.py` | FastAPI app: `/upload` and `/ask` (streaming). The real app. |
 | `index.html` | Browser chat frontend (drag-drop upload + streaming answers). |
 | `main_test.py` | Earlier self-contained variant (kept for reference). |
-| `data/pdfs/` | Sample PDFs (`spiderman_sample.pdf`). |
+| `data/pdfs/` | Sample PDFs (`<your pdf>.pdf`). |
 | `data/vector_store/` | ChromaDB persistent store (auto-created). |
 | `pyproject.toml` | Dependencies (managed with **uv**). |
 | `requirements.txt` | Same dependencies for plain `pip install -r`. |
