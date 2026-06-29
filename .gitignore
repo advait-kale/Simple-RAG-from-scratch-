@@ -1,3 +1,5 @@
 /.claude
 CLAUDE.md
 /data
+__pycache__/
+*.pyc

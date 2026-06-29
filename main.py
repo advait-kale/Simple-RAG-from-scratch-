@@ -98,24 +98,31 @@ def get_context(query: str, top_k: int = top_k):
 def answer(query: str):
     context = get_context(query)
     prompt = RAG_Prompt.format(context=context, query=query)
+
+    buffer = ""
+    passed_think = False
+    started = False        # so we can strip leading blank lines off the answer
     for ans in app.llm.stream(prompt):
-        yield ans.content
-def response(query: str):
-    full_response = ""
-    in_thinking = False
-    for content in answer(query):
+        token = ans.content or ""
+        if passed_think:
+            if not started:
+                token = token.lstrip()
+                if not token:
+                    continue
+                started = True
+            yield token
+            continue
+        buffer += token
+        if "</think>" in buffer:
+            passed_think = True
+            after = buffer.split("</think>", 1)[1].lstrip()
+            buffer = ""
+            if after:
+                started = True
+                yield after
 
-        full_response += content
-        
-        if "<think>" in content:
-            in_thinking = True
-            content = content.replace("<think>", "")
-        if in_thinking:
-            if "</think>" in content:
-            content = content.replace("</think>", "")
-        
-
-    yield full_response
+    if not passed_think and buffer:
+        yield buffer.lstrip()
 
 
 @app.post("/upload")
@@ -143,7 +150,7 @@ async def upload(file: UploadFile = File(...)):
 
 @app.post("/ask")
 async def ask(query: str):
-    return StreamingResponse(response(query), media_type="text/plain")
+    return StreamingResponse(answer(query), media_type="text/plain")
 
 
 from fastapi.middleware.cors import CORSMiddleware
