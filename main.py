@@ -1,4 +1,3 @@
-import ollama
 from langchain.chat_models import init_chat_model
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -8,9 +7,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 
 import chromadb
-from sklearn.metrics.pairwise import cosine_similarity
-import os, glob, uuid
-from pathlib import Path
+import uuid
 
 from pypdf import PdfReader
 import io
@@ -18,12 +15,13 @@ import io
 
 llm_model = "qwen3:4b"
 embedding_model = "qwen3-embedding:0.6b"
-temprature = 0.0
+temperature = 0.0
 pdf_path = "data/pdfs"
 vector_store_path = "data/vector_store"
 top_k = 3
 chunk_size = 1000
 chunk_overlap = 150
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB cap on uploaded PDFs
 RAG_Prompt = """Use the context to answer the query
 
 <context>
@@ -49,7 +47,7 @@ def _startup():
     app.llm = init_chat_model(
         model=llm_model,
         model_provider="ollama",
-        temperature=temprature,
+        temperature=temperature,
         reasoning=False
     )
 
@@ -64,7 +62,7 @@ def _startup():
         app.chroma.delete_collection(name="pdf_documents")
 
     except Exception as e:
-        print("Error {e}")
+        print(f"Error {e}")
         
 
     app.collection = app.chroma.create_collection(
@@ -131,6 +129,9 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(400, "Only PDF files are allowed")
 
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "PDF too large (max 10 MB)")
+
     pages = process_pdf(content)
     if not pages:
         raise HTTPException(400, "Could not read any text from the PDF")

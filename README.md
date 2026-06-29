@@ -23,6 +23,7 @@ question ─► embed ─► nearest chunks ─► prompt ─► LLM ─► stre
 | `data/pdfs/` | Sample PDFs (`spiderman_sample.pdf`). |
 | `data/vector_store/` | ChromaDB persistent store (auto-created). |
 | `pyproject.toml` | Dependencies (managed with **uv**). |
+| `requirements.txt` | Same dependencies for plain `pip install -r`. |
 
 ---
 
@@ -47,6 +48,18 @@ question ─► embed ─► nearest chunks ─► prompt ─► LLM ─► stre
 uv sync          # creates .venv and installs everything from pyproject.toml
 ```
 
+Not using uv? Use pip with the provided `requirements.txt`:
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
 ---
 
 ## Run
@@ -55,6 +68,7 @@ uv sync          # creates .venv and installs everything from pyproject.toml
 # 1. make sure Ollama is running (ollama serve, or the desktop app)
 # 2. start the API
 uv run uvicorn main:app --reload
+# (with a pip venv activated, just: uvicorn main:app --reload)
 ```
 
 - API: <http://127.0.0.1:8000>
