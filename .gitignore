@@ -3,3 +3,15 @@ CLAUDE.md
 /data
 __pycache__/
 *.pyc
+
+# PyInstaller build artifacts
+/build
+/dist
+*.manifest
+
+# Local build/run logs
+build_log.txt
+exe_run.log
+
+# Virtual env
+/.venv

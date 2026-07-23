@@ -1,7 +1,9 @@
 from langchain.chat_models import init_chat_model
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+
+import sys, os
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
@@ -162,5 +164,22 @@ app.add_middleware(
     allow_methods=["*"],     # GET, POST, OPTIONS, ...
     allow_headers=["*"],
 )
+
+
+def resource_path(rel: str) -> str:
+    # works in dev AND inside a PyInstaller exe (bundled files land in sys._MEIPASS)
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
+@app.get("/")
+def index():
+    return FileResponse(resource_path("index.html"))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    import webbrowser, threading
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
 

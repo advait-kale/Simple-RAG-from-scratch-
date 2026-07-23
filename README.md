@@ -1,9 +1,9 @@
 # RAG from Scratch — PDF Q&A
 
 A small **Retrieval-Augmented Generation** app: upload a PDF, ask questions, get
-answers grounded in that document. Runs fully **local** — Ollama for the LLM and
-embeddings, ChromaDB for the vector store, FastAPI for the API, and a single-file
-HTML chat frontend.
+answers grounded in that document. Runs **fully local** — no cloud, no API keys.
+Ollama for the LLM and embeddings, ChromaDB for the vector store, FastAPI for the
+API, and a single-file HTML chat UI.
 
 ```
 PDF ─► extract text ─► chunk ─► embed ─► ChromaDB (cosine)
@@ -11,133 +11,136 @@ PDF ─► extract text ─► chunk ─► embed ─► ChromaDB (cosine)
 question ─► embed ─► nearest chunks ─► prompt ─► LLM ─► streamed answer
 ```
 
+> **Demo:** _add a screenshot or GIF here_ — e.g. `docs/demo.gif`. This is the
+> single highest-impact thing on the page; a 5-second clip of dropping a PDF and
+> watching the answer stream in sells the project better than any paragraph.
+
+---
+
+## Stack
+
+- **FastAPI** — `/upload` + `/ask` (streaming) API, also serves the frontend.
+- **Ollama** — local LLM (`qwen3:4b`) + embeddings (`qwen3-embedding:0.6b`).
+- **ChromaDB** — persistent vector store, cosine distance.
+- **pypdf** — PDF text extraction.
+- **Vanilla HTML/JS** — drag-drop upload + token-by-token streaming, zero build step.
+
+---
+
+## Run it
+
+Prerequisites: **[Ollama](https://ollama.com/)** and **[uv](https://docs.astral.sh/uv/)** installed.
+
+**1. Pull the models** (one-time, ~3 GB download)
+```bash
+ollama pull qwen3:4b              # writes the answers
+ollama pull qwen3-embedding:0.6b  # turns text into vectors
+```
+
+**2. Install dependencies**
+```bash
+uv sync                           # creates .venv from pyproject.toml
+```
+Not using uv? `python -m venv .venv`, activate it, then `pip install -r requirements.txt`.
+
+**3. Start Ollama** (must be running *before* the app)
+```bash
+ollama serve                      # or just launch the Ollama desktop app
+```
+
+**4. Start the app**
+```bash
+uv run python main.py             # (pip venv activated: python main.py)
+```
+It boots the server **and** auto-opens <http://127.0.0.1:8000> in your browser.
+
+**5. Use it** — drop a PDF onto the upload strip, wait for **ready ✓**, type a
+question, press Enter. The answer streams in token by token.
+
 ---
 
 ## What's inside
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `main.py` | FastAPI app: `/upload` and `/ask` (streaming). The real app. |
-| `index.html` | Browser chat frontend (drag-drop upload + streaming answers). |
-| `main_test.py` | Earlier self-contained variant (kept for reference). |
-| `data/pdfs/` | Sample PDFs (`spiderman_sample.pdf`). |
-| `data/vector_store/` | ChromaDB persistent store (auto-created). |
-| `pyproject.toml` | Dependencies (managed with **uv**). |
-| `requirements.txt` | Same dependencies for plain `pip install -r`. |
+| `main.py` | The app — FastAPI `/upload` + `/ask`, serves `index.html`, launches uvicorn. |
+| `index.html` | Browser chat UI (drag-drop upload + streaming answers). |
+| `rag_app.spec` | PyInstaller recipe to bundle a standalone exe (see [Packaging](#packaging)). |
+| `Learning_RAG/` | Notebooks + earlier variants showing how the pieces were built up. |
+| `RAG_02.ipynb` | Loaders, chunking, and the ChromaDB cosine-vs-L2 lesson. |
+| `pyproject.toml` / `requirements.txt` | Dependencies (uv / pip). |
 
----
-
-## Prerequisites
-
-1. **[uv](https://docs.astral.sh/uv/)** — Python package/venv manager.
-2. **[Ollama](https://ollama.com/)** running locally (`localhost:11434`).
-3. Pull the two models used:
-   ```bash
-   ollama pull qwen3:4b              # the LLM that writes answers
-   ollama pull qwen3-embedding:0.6b  # turns text into vectors
-   ```
-   > Models live wherever `OLLAMA_MODELS` points (this project used
-   > `C:\Advait\Ollama`). Set it, restart Ollama, then pull.
-
----
-
-## Setup
-
-```bash
-# from the project folder
-uv sync          # creates .venv and installs everything from pyproject.toml
-```
-
-Not using uv? Use pip with the provided `requirements.txt`:
-
-```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-```
-
----
-
-## Run
-
-```bash
-# 1. make sure Ollama is running (ollama serve, or the desktop app)
-# 2. start the API
-uv run uvicorn main:app --reload
-# (with a pip venv activated, just: uvicorn main:app --reload)
-```
-
-- API: <http://127.0.0.1:8000>
-- Interactive docs: <http://127.0.0.1:8000/docs>
-
-Then open **`index.html`** in your browser (double-click it). Drop a PDF, ask away.
-
----
-
-## Usage
-
-### Frontend
-1. Drag a PDF onto the upload strip (or click to choose). Wait for **ready ✓**.
-2. Type a question, press **Enter**. The answer streams in token by token.
-
-### API directly (curl)
-```bash
-# upload a PDF (field name must be "file")
-curl -F "file=@data/pdfs/spiderman_sample.pdf" http://127.0.0.1:8000/upload
-
-# ask a question (query is a query-string param)
-curl -X POST "http://127.0.0.1:8000/ask?query=who%20created%20spider-man"
-```
+> `data/` (uploaded PDFs + the vector store) is git-ignored — it's local runtime
+> state, created on first run.
 
 ---
 
 ## How it works
 
 **Ingest (`/upload`)**
-1. `process_pdf` — read the PDF bytes with `pypdf`, one text string per page.
-2. `split_into_chunks` — `RecursiveCharacterTextSplitter` cuts even ~1000-char
-   chunks (150 overlap) so retrieval is fine-grained.
-3. `generate_embedding` — `OllamaEmbeddings.embed_documents` turns each chunk into
-   a vector.
+1. `process_pdf` — read PDF bytes with `pypdf`, one text string per page.
+2. `split_into_chunks` — `RecursiveCharacterTextSplitter`, ~1000-char chunks, 150 overlap.
+3. `generate_embedding` — `OllamaEmbeddings.embed_documents` → one vector per chunk.
 4. `collection.add` — store vectors + text in ChromaDB.
 
 **Query (`/ask`)**
-1. `get_context` — embed the question (`embed_query`), pull the `top_k` nearest
-   chunks, join them.
-2. `answer` — fill the `RAG_Prompt` with that context + question, then
-   `app.llm.stream(...)` yields the answer token by token → `StreamingResponse`.
+1. `get_context` — embed the question, pull the `top_k` nearest chunks, join them.
+2. `answer` — fill `RAG_Prompt` with context + question, `app.llm.stream(...)` yields
+   the answer token by token → `StreamingResponse`.
+
+### API directly
+
+```bash
+# upload (field name must be "file")
+curl -F "file=@your.pdf" http://127.0.0.1:8000/upload
+
+# ask (query is a query-string param)
+curl -X POST "http://127.0.0.1:8000/ask?query=who%20created%20spider-man"
+```
+
+Interactive docs at <http://127.0.0.1:8000/docs>.
 
 ---
 
 ## Configuration
 
-Edit the constants at the top of `main.py`:
+Constants at the top of `main.py`:
 
 | Name | Default | Meaning |
 |------|---------|---------|
 | `llm_model` | `qwen3:4b` | Ollama model that writes answers |
 | `embedding_model` | `qwen3-embedding:0.6b` | Ollama model that makes vectors |
-| `top_k` | `3` | how many chunks to retrieve per question |
+| `top_k` | `3` | chunks retrieved per question |
 | `chunk_size` / `chunk_overlap` | `1000` / `150` | chunking granularity |
 | `vector_store_path` | `data/vector_store` | where ChromaDB persists |
 
 ---
 
+## Packaging
+
+Bundle everything into a single Windows exe:
+
+```bash
+uv run pyinstaller rag_app.spec    # → dist/rag_app.exe
+```
+
+The exe boots the same server and serves the UI (Ollama still required on the host).
+Note it's a large onefile build and can trip antivirus heuristics — for real
+distribution prefer a `--onedir` build and code-signing. For running the project,
+`python main.py` is the intended path.
+
+---
+
 ## Notes & gotchas
 
-- **Cosine, not L2.** The collection is created with `metadata={"hnsw:space": "cosine"}`.
-  ChromaDB defaults to **squared-L2**, which breaks `similarity = 1 - distance`. The
-  metric is locked at creation — to change it you must delete + recreate the collection.
+- **Cosine, not L2.** Collection created with `metadata={"hnsw:space": "cosine"}`.
+  ChromaDB defaults to squared-L2, which breaks `similarity = 1 - distance`. The metric
+  is locked at creation — to change it you must delete + recreate the collection.
 - **Fresh store each restart.** Startup deletes and recreates the collection, so
-  uploaded PDFs do **not** survive a server restart — re-upload after restarting.
-- **`reasoning=False`** on the LLM stops qwen3 from emitting a `<think>` block, so
-  answers are clean with no manual stripping.
-- **CORS is enabled** (`allow_origins=["*"]`) so the `file://` frontend can call the
-  API. Fine for local dev; tighten for anything public.
+  uploaded PDFs do **not** survive a restart — re-upload after restarting. (Intentional
+  for a demo; swap `delete_collection` for `get_or_create_collection` to persist.)
+- **`reasoning=False`** on the LLM stops qwen3's `<think>` block, so answers are clean.
+- **CORS `allow_origins=["*"]`** — fine for local dev; tighten for anything public.
 
 ---
 
@@ -145,8 +148,8 @@ Edit the constants at the top of `main.py`:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Frontend: "Can't reach the API…" | server not running / CORS | start uvicorn; CORS is already on |
-| `/ask` errors or hangs | Ollama not running, or model not pulled | `ollama serve`; `ollama list` |
+| "Can't reach the API…" | server not running | `python main.py` |
+| `/ask` errors or hangs | Ollama down / model not pulled | `ollama serve`; `ollama list` |
 | Empty / "no answer" | nothing uploaded, or PDF had no text | upload a text-based PDF first |
-| `model not found` | model missing in Ollama | `ollama pull qwen3:4b` etc. |
-| Editor shows red imports | wrong interpreter | select `.venv` in your IDE; running uses `uv run` regardless |
+| `model not found` | model missing in Ollama | `ollama pull qwen3:4b` |
+| Editor shows red imports | wrong interpreter | select `.venv` as the IDE interpreter |
