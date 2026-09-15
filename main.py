@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import StreamingResponse, FileResponse
 
 import sys, os
+from contextlib import asynccontextmanager
 
 try:                       # optional: pip install python-dotenv to use a .env file
     from dotenv import load_dotenv
@@ -84,40 +85,47 @@ RAG_Prompt = """Use the context to answer the query
 Asnwer: 
 """
 
-app = FastAPI(title="RAG API ")
+COLLECTION_NAME = "pdf_documents"
 
-@app.on_event("startup")
-def _startup():
 
-    app.embedder = OllamaEmbeddings(
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Build the models and the vector store once, before the first request."""
+    app.state.embedder = OllamaEmbeddings(
         model=embedding_model
     )
 
-    app.llm = init_chat_model(
+    app.state.llm = init_chat_model(
         model=llm_model,
         model_provider="ollama",
         temperature=temperature,
         reasoning=False
     )
 
-    app.splitter = RecursiveCharacterTextSplitter(
+    app.state.splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", " ", ".", ""]
     )
 
-    app.chroma = chromadb.PersistentClient(path=vector_store_path)
+    app.state.chroma = chromadb.PersistentClient(path=vector_store_path)
     try:
-        app.chroma.delete_collection(name="pdf_documents")
+        app.state.chroma.delete_collection(name=COLLECTION_NAME)
+    except Exception:
+        # Nothing to delete on a first run. That is the normal path, so it
+        # should not print anything that looks like a failure.
+        pass
 
-    except Exception as e:
-        print(f"Error {e}")
-        
-
-    app.collection = app.chroma.create_collection(
-        name="pdf_documents",
+    app.state.collection = app.state.chroma.create_collection(
+        name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"}
     )
+
+    yield
+
+
+app = FastAPI(title="RAG API", lifespan=lifespan)
+
 
 def process_pdf(content: bytes):
     reader = PdfReader(io.BytesIO(content))
@@ -132,11 +140,11 @@ def split_into_chunks(documents, splitter):
     return splitter.create_documents(documents)   # list[str] -> chunked Documents
 
 def generate_embedding(chunks):
-    return app.embedder.embed_documents(chunks)   # list[str] -> list[list[float]]
+    return app.state.embedder.embed_documents(chunks)   # list[str] -> list[list[float]]
 
 def get_context(query: str, top_k: int = top_k):
-    query_embedding = app.embedder.embed_query(query)   # str -> list[float]
-    results = app.collection.query(
+    query_embedding = app.state.embedder.embed_query(query)   # str -> list[float]
+    results = app.state.collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
     )
@@ -149,7 +157,7 @@ def answer(query: str):
     buffer = ""
     passed_think = False
     started = False        # so we can strip leading blank lines off the answer
-    for ans in app.llm.stream(prompt):
+    for ans in app.state.llm.stream(prompt):
         token = ans.content or ""
         if passed_think:
             if not started:
@@ -185,11 +193,11 @@ async def upload(file: UploadFile = File(...)):
     if not pages:
         raise HTTPException(400, "Could not read any text from the PDF")
 
-    chunks = split_into_chunks(pages, app.splitter)
+    chunks = split_into_chunks(pages, app.state.splitter)
     chunks_page_content = [chunk.page_content for chunk in chunks]
     embeddings = generate_embedding(chunks_page_content)
 
-    app.collection.add(
+    app.state.collection.add(
         ids=[f"{uuid.uuid4().hex[:8]}_{i}" for i in range(len(chunks_page_content))],
         embeddings=embeddings,
         documents=chunks_page_content,
