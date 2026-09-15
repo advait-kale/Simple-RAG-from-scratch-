@@ -63,8 +63,10 @@ question, press Enter. The answer streams in token by token.
 
 | Path | Purpose |
 |------|---------|
-| `main.py` | The app — FastAPI `/upload` + `/ask`, serves `index.html`, launches uvicorn. |
-| `index.html` | Browser chat UI (drag-drop upload + streaming answers). |
+| `main.py` | The app — the FastAPI endpoints, serves `index.html`, launches uvicorn. |
+| `index.html` | Browser chat UI (upload + streaming answers + sources). |
+| `tests/` | pytest suite; runs offline, no Ollama needed (see [Tests](#tests)). |
+| `.env.example` | Every `RAG_*` setting with its default (see [Configuration](#configuration)). |
 | `rag_app.spec` | PyInstaller recipe to bundle a standalone exe (see [Packaging](#packaging)). |
 | `Learning_RAG/` | Notebooks + earlier variants showing how the pieces were built up. |
 | `RAG_02.ipynb` | Loaders, chunking, and the ChromaDB cosine-vs-L2 lesson. |
@@ -95,6 +97,22 @@ The chunks the answer came from are returned in an `X-Sources` response header
 (percent-encoded JSON, e.g. `["report.pdf p.2","report.pdf p.7"]`) and shown
 under the answer in the UI.
 
+### Endpoints
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| `POST` | `/upload` | Index a PDF. Multipart, field name `file`. Returns page and chunk counts. |
+| `POST` | `/ask` | Answer a question. JSON body `{"query": "..."}`. Streams `text/plain`; cites its chunks in the `X-Sources` header. |
+| `GET` | `/health` | Liveness, the configured models, and how many chunks are indexed. |
+| `GET` | `/documents` | Which files are indexed, with page and chunk counts. |
+| `DELETE` | `/documents` | Empty the vector store without restarting. |
+| `GET` | `/` | The browser UI. |
+
+Error responses use FastAPI's `{"detail": "..."}` shape: `400` for a non-PDF, an
+unreadable PDF, an empty question or a question asked before anything was
+uploaded; `413` over the size cap; `422` for a malformed body; `404` when
+retrieval matches nothing.
+
 ### API directly
 
 ```bash
@@ -111,15 +129,24 @@ Interactive docs at <http://127.0.0.1:8000/docs>.
 
 ## Configuration
 
-Constants at the top of `main.py`:
+Everything is read from the environment at startup, with the defaults below. Copy
+`.env.example` to `.env` and edit it (loaded automatically if `python-dotenv` is
+installed), or export the variables before starting the app.
 
-| Name | Default | Meaning |
-|------|---------|---------|
-| `llm_model` | `qwen3:4b` | Ollama model that writes answers |
-| `embedding_model` | `qwen3-embedding:0.6b` | Ollama model that makes vectors |
-| `top_k` | `3` | chunks retrieved per question |
-| `chunk_size` / `chunk_overlap` | `1000` / `150` | chunking granularity |
-| `vector_store_path` | `data/vector_store` | where ChromaDB persists |
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `RAG_LLM_MODEL` | `qwen3:4b` | Ollama model that writes answers |
+| `RAG_EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Ollama model that makes vectors |
+| `RAG_TEMPERATURE` | `0.0` | sampling temperature for the answer |
+| `RAG_TOP_K` | `3` | chunks retrieved per question |
+| `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `1000` / `150` | chunking granularity |
+| `RAG_VECTOR_STORE_PATH` | `data/vector_store` | where ChromaDB persists |
+| `RAG_MAX_UPLOAD_MB` | `10` | rejected above this, with a `413` |
+| `RAG_HOST` / `RAG_PORT` | `127.0.0.1` / `8000` | where uvicorn binds |
+| `RAG_ALLOWED_ORIGINS` | `*` | comma-separated CORS origins |
+
+Bad values fail at startup with a message naming the variable, rather than
+surfacing later as an empty retrieval or a confusing ChromaDB error.
 
 ---
 
@@ -161,7 +188,12 @@ distribution prefer a `--onedir` build and code-signing. For running the project
   uploaded PDFs do **not** survive a restart — re-upload after restarting. (Intentional
   for a demo; swap `delete_collection` for `get_or_create_collection` to persist.)
 - **`reasoning=False`** on the LLM stops qwen3's `<think>` block, so answers are clean.
-- **CORS `allow_origins=["*"]`** — fine for local dev; tighten for anything public.
+- **CORS defaults to `*`** — fine for local dev; set `RAG_ALLOWED_ORIGINS` for
+  anything public. `X-Sources` is in `expose_headers`, or the browser would hide
+  it whenever the UI points at a different origin.
+- **Re-uploading the same file adds it twice.** Chunks are only ever appended, so
+  the same PDF uploaded twice is indexed twice. `DELETE /documents` clears the
+  store.
 
 ---
 
@@ -171,6 +203,8 @@ distribution prefer a `--onedir` build and code-signing. For running the project
 |---------|--------------|-----|
 | "Can't reach the API…" | server not running | `python main.py` |
 | `/ask` errors or hangs | Ollama down / model not pulled | `ollama serve`; `ollama list` |
-| Empty / "no answer" | nothing uploaded, or PDF had no text | upload a text-based PDF first |
+| `400 No PDF has been uploaded yet` | nothing indexed | upload a PDF first |
+| `400 Could not read any text` | scanned/image-only PDF | `pypdf` cannot OCR; use a text-based PDF |
+| `404 Nothing ... matched` | question unrelated to the PDF | rephrase, or raise `RAG_TOP_K` |
 | `model not found` | model missing in Ollama | `ollama pull qwen3:4b` |
 | Editor shows red imports | wrong interpreter | select `.venv` as the IDE interpreter |
