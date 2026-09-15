@@ -5,6 +5,12 @@ from fastapi.responses import StreamingResponse, FileResponse
 
 import sys, os
 
+try:                       # optional: pip install python-dotenv to use a .env file
+    from dotenv import load_dotenv
+    load_dotenv()
+except ModuleNotFoundError:
+    pass
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 
@@ -15,15 +21,56 @@ from pypdf import PdfReader
 import io
 
 
-llm_model = "qwen3:4b"
-embedding_model = "qwen3-embedding:0.6b"
-temperature = 0.0
-pdf_path = "data/pdfs"
-vector_store_path = "data/vector_store"
-top_k = 3
-chunk_size = 1000
-chunk_overlap = 150
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB cap on uploaded PDFs
+def _env_str(name: str, default: str) -> str:
+    value = os.getenv(name, "").strip()
+    return value or default
+
+
+def _env_number(name: str, default, cast):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return cast(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} must be a {cast.__name__}, got {raw!r}") from None
+
+
+# Every setting can be overridden from the environment (see .env.example); the
+# defaults below are the ones the README documents and are what you get if you
+# just run `python main.py`.
+llm_model = _env_str("RAG_LLM_MODEL", "qwen3:4b")
+embedding_model = _env_str("RAG_EMBEDDING_MODEL", "qwen3-embedding:0.6b")
+temperature = _env_number("RAG_TEMPERATURE", 0.0, float)
+pdf_path = _env_str("RAG_PDF_PATH", "data/pdfs")
+vector_store_path = _env_str("RAG_VECTOR_STORE_PATH", "data/vector_store")
+top_k = _env_number("RAG_TOP_K", 3, int)
+chunk_size = _env_number("RAG_CHUNK_SIZE", 1000, int)
+chunk_overlap = _env_number("RAG_CHUNK_OVERLAP", 150, int)
+max_upload_mb = _env_number("RAG_MAX_UPLOAD_MB", 10, int)
+MAX_UPLOAD_BYTES = max_upload_mb * 1024 * 1024
+allowed_origins = [
+    origin.strip()
+    for origin in _env_str("RAG_ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+host = _env_str("RAG_HOST", "127.0.0.1")
+port = _env_number("RAG_PORT", 8000, int)
+
+# Catch bad combinations here rather than halfway through an upload.
+if top_k < 1:
+    raise RuntimeError(f"RAG_TOP_K must be at least 1, got {top_k}")
+if chunk_size < 1:
+    raise RuntimeError(f"RAG_CHUNK_SIZE must be at least 1, got {chunk_size}")
+if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+    raise RuntimeError(
+        f"RAG_CHUNK_OVERLAP must be between 0 and RAG_CHUNK_SIZE-1 "
+        f"({chunk_size - 1}), got {chunk_overlap}"
+    )
+if max_upload_mb < 1:
+    raise RuntimeError(f"RAG_MAX_UPLOAD_MB must be at least 1, got {max_upload_mb}")
+
+
 RAG_Prompt = """Use the context to answer the query
 
 <context>
@@ -160,8 +207,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # any origin — fine for local dev
-    allow_methods=["*"],     # GET, POST, OPTIONS, ...
+    allow_origins=allowed_origins,   # "*" by default — fine for local dev
+    allow_methods=["*"],             # GET, POST, OPTIONS, ...
     allow_headers=["*"],
 )
 
@@ -179,7 +226,7 @@ def index():
 if __name__ == "__main__":
     import uvicorn
     import webbrowser, threading
-    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    threading.Timer(1.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+    uvicorn.run(app, host=host, port=port)
 
 
