@@ -78,15 +78,22 @@ question, press Enter. The answer streams in token by token.
 ## How it works
 
 **Ingest (`/upload`)**
-1. `process_pdf` — read PDF bytes with `pypdf`, one text string per page.
-2. `split_into_chunks` — `RecursiveCharacterTextSplitter`, ~1000-char chunks, 150 overlap.
+1. `process_pdf` — read PDF bytes with `pypdf`, yielding `(page_number, text)` per
+   page that has text.
+2. `split_into_chunks` — `RecursiveCharacterTextSplitter`, ~1000-char chunks, 150
+   overlap, each chunk tagged with its source filename and page.
 3. `generate_embedding` — `OllamaEmbeddings.embed_documents` → one vector per chunk.
-4. `collection.add` — store vectors + text in ChromaDB.
+4. `collection.add` — store vectors + text + metadata in ChromaDB.
 
 **Query (`/ask`)**
-1. `get_context` — embed the question, pull the `top_k` nearest chunks, join them.
-2. `answer` — fill `RAG_Prompt` with context + question, `app.llm.stream(...)` yields
-   the answer token by token → `StreamingResponse`.
+1. `get_context` — embed the question, pull the `top_k` nearest chunks with metadata.
+2. `build_context` — prefix each chunk with `[file.pdf p.4]` so the model can cite it.
+3. `answer` — fill `RAG_Prompt` with context + question, `app.state.llm.stream(...)`
+   yields the answer token by token → `StreamingResponse`.
+
+The chunks the answer came from are returned in an `X-Sources` response header
+(percent-encoded JSON, e.g. `["report.pdf p.2","report.pdf p.7"]`) and shown
+under the answer in the UI.
 
 ### API directly
 

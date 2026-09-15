@@ -18,6 +18,8 @@ from langchain_ollama import OllamaEmbeddings
 
 import chromadb
 import uuid
+import json
+from urllib.parse import quote
 
 from pypdf import PdfReader
 import io
@@ -133,16 +135,28 @@ class AskRequest(BaseModel):
 
 
 def process_pdf(content: bytes):
+    """Extract text per page as (page_number, text), skipping empty pages.
+
+    The page number is the one printed in a PDF reader (1-based). Pages with
+    no extractable text are dropped, which is why the number has to be
+    carried along rather than recovered from the list index later.
+    """
     reader = PdfReader(io.BytesIO(content))
     pages = []
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages, start=1):
         text = (page.extract_text() or "").strip()
         if text:
-            pages.append(text)
+            pages.append((page_number, text))
     return pages
 
-def split_into_chunks(documents, splitter):
-    return splitter.create_documents(documents)   # list[str] -> chunked Documents
+
+def split_into_chunks(pages, splitter, source: str):
+    """Chunk each page, tagging every chunk with the page it came from."""
+    texts = [text for _, text in pages]
+    metadatas = [{"source": source, "page": number} for number, _ in pages]
+    # create_documents copies each metadata dict onto every chunk cut from
+    # that page, so a chunk always knows its own page.
+    return splitter.create_documents(texts, metadatas=metadatas)
 
 def generate_embedding(chunks):
     return app.state.embedder.embed_documents(chunks)   # list[str] -> list[list[float]]
@@ -157,7 +171,36 @@ def get_context(query: str, k: int | None = None):
     # back [[]] or even [], so do not index into it blindly.
     matches = results.get("documents") or []
     documents = matches[0] if matches else []
-    return "\n\n".join(documents)
+    meta_matches = results.get("metadatas") or []
+    metadatas = meta_matches[0] if meta_matches else []
+    return documents, metadatas
+
+
+def describe_source(metadata) -> str:
+    """Human-readable label for one retrieved chunk, e.g. "report.pdf p.4"."""
+    metadata = metadata or {}
+    source = metadata.get("source") or "unknown"
+    page = metadata.get("page")
+    return f"{source} p.{page}" if page else source
+
+
+def build_context(documents, metadatas) -> str:
+    """Prefix each chunk with where it came from so the model can cite it."""
+    blocks = []
+    for index, document in enumerate(documents):
+        metadata = metadatas[index] if index < len(metadatas) else {}
+        blocks.append(f"[{describe_source(metadata)}]\n{document}")
+    return "\n\n".join(blocks)
+
+
+def unique_sources(metadatas):
+    """Ordered, de-duplicated source labels for the retrieved chunks."""
+    labels = []
+    for metadata in metadatas:
+        label = describe_source(metadata)
+        if label not in labels:
+            labels.append(label)
+    return labels
 
 
 def answer(context: str, query: str):
@@ -202,18 +245,24 @@ async def upload(file: UploadFile = File(...)):
     if not pages:
         raise HTTPException(400, "Could not read any text from the PDF")
 
-    chunks = split_into_chunks(pages, app.state.splitter)
+    chunks = split_into_chunks(pages, app.state.splitter, file.filename)
     chunks_page_content = [chunk.page_content for chunk in chunks]
     embeddings = generate_embedding(chunks_page_content)
 
+    # One id prefix per upload keeps the chunks of a single file groupable.
+    batch = uuid.uuid4().hex[:8]
     app.state.collection.add(
-        ids=[f"{uuid.uuid4().hex[:8]}_{i}" for i in range(len(chunks_page_content))],
+        ids=[f"{batch}_{i}" for i in range(len(chunks_page_content))],
         embeddings=embeddings,
         documents=chunks_page_content,
-        metadatas=[{"source": file.filename} for _ in chunks_page_content]
+        metadatas=[chunk.metadata for chunk in chunks]
     )
 
-    return "Uploaded"
+    return {
+        "filename": file.filename,
+        "pages_indexed": len(pages),
+        "chunks_indexed": len(chunks_page_content),
+    }
 
 @app.post("/ask")
 async def ask(request: AskRequest):
@@ -228,11 +277,18 @@ async def ask(request: AskRequest):
     if app.state.collection.count() == 0:
         raise HTTPException(400, "No PDF has been uploaded yet")
 
-    context = get_context(query)
+    documents, metadatas = get_context(query)
+    context = build_context(documents, metadatas)
     if not context.strip():
         raise HTTPException(404, "Nothing in the uploaded PDFs matched that question")
 
-    return StreamingResponse(answer(context, query), media_type="text/plain")
+    # The body is a stream, so the citations ride along in a header the
+    # client can read as soon as the response starts.
+    return StreamingResponse(
+        answer(context, query),
+        media_type="text/plain",
+        headers={"X-Sources": quote(json.dumps(unique_sources(metadatas)))},
+    )
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -242,6 +298,7 @@ app.add_middleware(
     allow_origins=allowed_origins,   # "*" by default — fine for local dev
     allow_methods=["*"],             # GET, POST, OPTIONS, ...
     allow_headers=["*"],
+    expose_headers=["X-Sources"],    # custom headers are hidden cross-origin otherwise
 )
 
 

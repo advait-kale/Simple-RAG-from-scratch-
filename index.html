@@ -141,6 +141,16 @@
       display: none;
     }
 
+    #sources {
+      margin-top: 8px;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
+    #sources:empty {
+      display: none;
+    }
+
     /* ---------- API base config ---------- */
     .cfg {
       margin-bottom: 20px;
@@ -185,6 +195,7 @@
       </div>
       <div class="status" id="askStatus"></div>
       <div id="answer"></div>
+      <div id="sources"></div>
     </div>
   </div>
 
@@ -220,7 +231,12 @@
       try {
         const res = await fetch(`${apiBase()}/upload`, { method: "POST", body: form });
         if (!res.ok) throw new Error(await errorText(res));
-        setStatus(byId("uploadStatus"), "✓ " + (await res.text()), "ok");
+        const info = await res.json();
+        setStatus(
+          byId("uploadStatus"),
+          `✓ Indexed ${info.chunks_indexed} chunks from ${info.pages_indexed} pages`,
+          "ok"
+        );
       } catch (err) {
         setStatus(byId("uploadStatus"), "Error: " + friendlyError(err), "err");
       } finally {
@@ -241,6 +257,7 @@
       byId("askBtn").disabled = true;
       setStatus(byId("askStatus"), "Thinking…");
       byId("answer").textContent = "";
+      byId("sources").textContent = "";
 
       try {
         const res = await fetch(`${apiBase()}/ask`, {
@@ -249,6 +266,12 @@
           body: JSON.stringify({ query: question }),
         });
         if (!res.ok) throw new Error(await errorText(res));
+
+        // which chunks the answer was built from (see X-Sources on the server)
+        const sources = readSources(res);
+        if (sources.length) {
+          byId("sources").textContent = "Sources: " + sources.join(" · ");
+        }
 
         // read the streamed body chunk by chunk
         const reader = res.body.getReader();
@@ -265,6 +288,18 @@
         byId("askBtn").disabled = false;
       }
     };
+
+    // X-Sources is a percent-encoded JSON array of "file.pdf p.3" labels
+    function readSources(res) {
+      const header = res.headers.get("X-Sources");
+      if (!header) return [];
+      try {
+        const parsed = JSON.parse(decodeURIComponent(header));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
 
     // pull the message out of FastAPI's {"detail": ...} error body
     async function errorText(res) {
