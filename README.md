@@ -94,8 +94,8 @@ question, press Enter. The answer streams in token by token.
 # upload (field name must be "file")
 curl -F "file=@your.pdf" http://127.0.0.1:8000/upload
 
-# ask (query is a query-string param)
-curl -X POST "http://127.0.0.1:8000/ask?query=who%20created%20spider-man"
+# ask (question goes in a JSON body)
+curl -X POST http://127.0.0.1:8000/ask      -H "Content-Type: application/json"      -d '{"query": "who created spider-man"}'
 ```
 
 Interactive docs at <http://127.0.0.1:8000/docs>.

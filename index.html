@@ -219,9 +219,8 @@
 
       try {
         const res = await fetch(`${apiBase()}/upload`, { method: "POST", body: form });
-        const text = await res.text();
-        if (!res.ok) throw new Error(text);
-        setStatus(byId("uploadStatus"), "✓ " + text, "ok");
+        if (!res.ok) throw new Error(await errorText(res));
+        setStatus(byId("uploadStatus"), "✓ " + (await res.text()), "ok");
       } catch (err) {
         setStatus(byId("uploadStatus"), "Error: " + friendlyError(err), "err");
       } finally {
@@ -230,7 +229,7 @@
     };
 
     // -------------------------------------------------------------------
-    // ask:  POST /ask?query=...  (response streams as text/plain)
+    // ask:  POST /ask  {"query": "..."}  (response streams as text/plain)
     // -------------------------------------------------------------------
     byId("askBtn").onclick = async () => {
       const question = byId("query").value.trim();
@@ -244,9 +243,12 @@
       byId("answer").textContent = "";
 
       try {
-        const url = `${apiBase()}/ask?query=${encodeURIComponent(question)}`;
-        const res = await fetch(url, { method: "POST" });
-        if (!res.ok) throw new Error(await res.text());
+        const res = await fetch(`${apiBase()}/ask`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: question }),
+        });
+        if (!res.ok) throw new Error(await errorText(res));
 
         // read the streamed body chunk by chunk
         const reader = res.body.getReader();
@@ -263,6 +265,21 @@
         byId("askBtn").disabled = false;
       }
     };
+
+    // pull the message out of FastAPI's {"detail": ...} error body
+    async function errorText(res) {
+      const raw = await res.text();
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.detail === "string") return parsed.detail;
+        if (Array.isArray(parsed.detail)) {
+          return parsed.detail.map((d) => d.msg || String(d)).join("; ");
+        }
+      } catch {
+        /* not JSON - fall through to the raw body */
+      }
+      return raw;
+    }
 
     // turn raw fetch errors into something readable
     function friendlyError(err) {

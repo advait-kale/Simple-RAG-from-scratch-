@@ -2,6 +2,7 @@ from langchain.chat_models import init_chat_model
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import StreamingResponse, FileResponse
+from pydantic import BaseModel, Field
 
 import sys, os
 from contextlib import asynccontextmanager
@@ -127,6 +128,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="RAG API", lifespan=lifespan)
 
 
+class AskRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="Question to answer from the uploaded PDFs")
+
+
 def process_pdf(content: bytes):
     reader = PdfReader(io.BytesIO(content))
     pages = []
@@ -211,8 +216,8 @@ async def upload(file: UploadFile = File(...)):
     return "Uploaded"
 
 @app.post("/ask")
-async def ask(query: str):
-    query = query.strip()
+async def ask(request: AskRequest):
+    query = request.query.strip()
     if not query:
         raise HTTPException(400, "Question cannot be empty")
 
