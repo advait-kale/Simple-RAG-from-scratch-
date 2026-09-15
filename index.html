@@ -151,6 +151,23 @@
       display: none;
     }
 
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    button.secondary:hover {
+      background: #f0f1f3;
+    }
+
+    #indexed {
+      margin-top: 10px;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+
     /* ---------- API base config ---------- */
     .cfg {
       margin-bottom: 20px;
@@ -182,8 +199,10 @@
       <div class="row">
         <input id="file" type="file" accept="application/pdf" />
         <button id="uploadBtn">Upload</button>
+        <button id="clearBtn" class="secondary" title="Remove every indexed PDF">Clear</button>
       </div>
       <div class="status" id="uploadStatus"></div>
+      <div id="indexed"></div>
     </div>
 
     <!-- step 2: ask -->
@@ -237,10 +256,50 @@
           `✓ Indexed ${info.chunks_indexed} chunks from ${info.pages_indexed} pages`,
           "ok"
         );
+        await refreshIndexed();
       } catch (err) {
         setStatus(byId("uploadStatus"), "Error: " + friendlyError(err), "err");
       } finally {
         byId("uploadBtn").disabled = false;
+      }
+    };
+
+    // -------------------------------------------------------------------
+    // GET /documents — show what is currently in the vector store
+    // -------------------------------------------------------------------
+    async function refreshIndexed() {
+      try {
+        const res = await fetch(`${apiBase()}/documents`);
+        if (!res.ok) return;
+        const { documents } = await res.json();
+        byId("indexed").textContent = documents.length
+          ? "Indexed: " +
+            documents
+              .map((d) => `${d.filename} (${d.pages} pages, ${d.chunks} chunks)`)
+              .join(" · ")
+          : "Nothing indexed yet.";
+      } catch {
+        byId("indexed").textContent = "";   // server not up yet; not worth a message
+      }
+    }
+
+    // -------------------------------------------------------------------
+    // DELETE /documents — empty the store
+    // -------------------------------------------------------------------
+    byId("clearBtn").onclick = async () => {
+      byId("clearBtn").disabled = true;
+      try {
+        const res = await fetch(`${apiBase()}/documents`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await errorText(res));
+        const { deleted_chunks } = await res.json();
+        setStatus(byId("uploadStatus"), `✓ Cleared ${deleted_chunks} chunks`, "ok");
+        byId("answer").textContent = "";
+        byId("sources").textContent = "";
+        await refreshIndexed();
+      } catch (err) {
+        setStatus(byId("uploadStatus"), "Error: " + friendlyError(err), "err");
+      } finally {
+        byId("clearBtn").disabled = false;
       }
     };
 
@@ -329,6 +388,8 @@
     byId("query").addEventListener("keydown", (e) => {
       if (e.key === "Enter") byId("askBtn").click();
     });
+
+    refreshIndexed();
   </script>
 </body>
 </html>

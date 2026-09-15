@@ -291,6 +291,56 @@ async def ask(request: AskRequest):
     )
 
 
+@app.get("/health")
+def health():
+    """Cheap readiness probe: is the app up, and what is it holding?"""
+    return {
+        "status": "ok",
+        "llm_model": llm_model,
+        "embedding_model": embedding_model,
+        "chunks_indexed": app.state.collection.count(),
+    }
+
+
+@app.get("/documents")
+def list_documents():
+    """Which PDFs are currently indexed, and how much of each."""
+    stored = app.state.collection.get(include=["metadatas"])
+
+    chunks_per_file = {}
+    pages_per_file = {}
+    for metadata in stored.get("metadatas") or []:
+        metadata = metadata or {}
+        source = metadata.get("source") or "unknown"
+        chunks_per_file[source] = chunks_per_file.get(source, 0) + 1
+        page = metadata.get("page")
+        if page is not None:
+            pages_per_file.setdefault(source, set()).add(page)
+
+    return {
+        "documents": [
+            {
+                "filename": filename,
+                "chunks": count,
+                "pages": len(pages_per_file.get(filename, ())),
+            }
+            for filename, count in sorted(chunks_per_file.items())
+        ]
+    }
+
+
+@app.delete("/documents")
+def clear_documents():
+    """Empty the vector store without restarting the server."""
+    removed = app.state.collection.count()
+    app.state.chroma.delete_collection(name=COLLECTION_NAME)
+    app.state.collection = app.state.chroma.create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"}
+    )
+    return {"deleted_chunks": removed}
+
+
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
