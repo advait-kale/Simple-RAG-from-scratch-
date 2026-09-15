@@ -142,16 +142,20 @@ def split_into_chunks(documents, splitter):
 def generate_embedding(chunks):
     return app.state.embedder.embed_documents(chunks)   # list[str] -> list[list[float]]
 
-def get_context(query: str, top_k: int = top_k):
+def get_context(query: str, k: int | None = None):
     query_embedding = app.state.embedder.embed_query(query)   # str -> list[float]
     results = app.state.collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k,
+        n_results=top_k if k is None else k,
     )
-    return "\n\n".join(results["documents"][0])
+    # Chroma returns one list per query embedding; an empty store gives
+    # back [[]] or even [], so do not index into it blindly.
+    matches = results.get("documents") or []
+    documents = matches[0] if matches else []
+    return "\n\n".join(documents)
 
-def answer(query: str):
-    context = get_context(query)
+
+def answer(context: str, query: str):
     prompt = RAG_Prompt.format(context=context, query=query)
 
     buffer = ""
@@ -208,7 +212,22 @@ async def upload(file: UploadFile = File(...)):
 
 @app.post("/ask")
 async def ask(query: str):
-    return StreamingResponse(answer(query), media_type="text/plain")
+    query = query.strip()
+    if not query:
+        raise HTTPException(400, "Question cannot be empty")
+
+    # Retrieval has to happen here, not inside the generator. Once
+    # StreamingResponse starts writing, the status line is already on the
+    # wire and an HTTPException raised later would arrive as a broken 200
+    # instead of a 4xx the frontend can show.
+    if app.state.collection.count() == 0:
+        raise HTTPException(400, "No PDF has been uploaded yet")
+
+    context = get_context(query)
+    if not context.strip():
+        raise HTTPException(404, "Nothing in the uploaded PDFs matched that question")
+
+    return StreamingResponse(answer(context, query), media_type="text/plain")
 
 
 from fastapi.middleware.cors import CORSMiddleware
