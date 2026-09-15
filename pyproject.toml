@@ -27,3 +27,13 @@ dependencies = [
     "torchtext>=0.6.0",
     "uvicorn>=0.49.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",            # required by fastapi.testclient
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]           # so the tests can import main.py from the repo root

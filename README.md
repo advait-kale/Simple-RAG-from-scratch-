@@ -123,6 +123,20 @@ Constants at the top of `main.py`:
 
 ---
 
+## Tests
+
+```bash
+uv run pytest                     # or: pytest
+```
+
+30 tests, no Ollama required and nothing written to disk: the embedder and the
+LLM are replaced with deterministic fakes, while ChromaDB runs in memory so
+retrieval, metadata and the cosine ranking are exercised for real. They cover
+PDF text extraction and page numbering, chunk metadata, the `<think>`-stripping
+in `answer()`, and every endpoint including the error paths.
+
+---
+
 ## Packaging
 
 Bundle everything into a single Windows exe:

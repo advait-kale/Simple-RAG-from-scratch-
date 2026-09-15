@@ -36,3 +36,7 @@ pyinstaller>=6.21.0
 # --- notebooks / misc ---
 ipywidgets>=8.1.8
 rich>=15.0.0
+
+# --- tests (pip install -r requirements.txt then: pytest) ---
+pytest>=8.0
+httpx>=0.27                   # fastapi.testclient runs on httpx
